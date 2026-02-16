@@ -46,3 +46,4 @@ with mujoco.viewer.launch_passive(m, d) as viewer:
     hold_position_pid(m, d, viewer, starting_position, duration=2.0, realtime=True, plotter=plotter)
 
     
+plotter.save_to_csv("simulation_log.csv")

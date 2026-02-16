@@ -119,11 +119,6 @@ def _step_realtime(m, step_start: float):
 class RealtimeJointPlotter:
     """
     Opens a Dash+Plotly page showing joint positions vs time.
-
-    Usage:
-      plotter = RealtimeJointPlotter(max_points=4000)
-      plotter.start(host="127.0.0.1", port=8050, update_ms=100)
-      ... inside sim loop: plotter.sample(m, d)
     """
 
     def __init__(self, joint_names=JOINT_NAMES, max_points: int = 2000):
@@ -138,28 +133,33 @@ class RealtimeJointPlotter:
         self._dash_thread: Optional[threading.Thread] = None
         self._running = False
 
+
+    # --------------------------------------------------
+    # Sample data from MuJoCo
+    # --------------------------------------------------
     def sample(self, m, d, now: Optional[float] = None) -> None:
-        """Record one sample from MuJoCo state."""
         if now is None:
             now = time.time()
+
         if self._t0 is None:
             self._t0 = now
-        t = now - self._t0
 
-        pos = get_positions_dict(m, d)  # degrees + gripper 0..100
+        t = now - self._t0
+        pos = get_positions_dict(m, d)
 
         with self._lock:
             self._t.append(float(t))
             for jn in self.joint_names:
                 self._y[jn].append(float(pos[jn]))
 
+
+    # --------------------------------------------------
+    # Start Dash server
+    # --------------------------------------------------
     def start(self, host: str = "127.0.0.1", port: int = 8050, update_ms: int = 100) -> None:
-        """
-        Starts the Dash server in a daemon thread.
-        Install deps: pip install dash plotly
-        """
         if self._running:
             return
+
         self._running = True
 
         def _run_dash():
@@ -175,7 +175,6 @@ class RealtimeJointPlotter:
 
             app = Dash(__name__)
 
-            # Create traces ONCE so the plot is never "empty"
             fig = go.Figure()
             for jn in self.joint_names:
                 fig.add_trace(go.Scatter(x=[], y=[], mode="lines", name=jn))
@@ -184,21 +183,15 @@ class RealtimeJointPlotter:
                 title="SO101 Joint Positions (deg, gripper=0..100)",
                 xaxis_title="time (s)",
                 yaxis_title="position",
-                margin=dict(l=40, r=20, t=50, b=40),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 template="plotly_white",
             )
 
-            app.layout = html.Div(
-                style={"maxWidth": "1200px", "margin": "0 auto"},
-                children=[
-                    html.H3("Realtime Joint Positions"),
-                    dcc.Graph(id="live-graph", figure=fig, animate=False),
-                    dcc.Interval(id="interval", interval=int(update_ms), n_intervals=0),
-                    html.Div(f"Open: http://{host}:{port}", style={"opacity": 0.6}),
-                    html.Pre(id="debug-text", style={"opacity": 0.7}),
-                ],
-            )
+            app.layout = html.Div([
+                html.H3("Realtime Joint Positions"),
+                dcc.Graph(id="live-graph", figure=fig),
+                dcc.Interval(id="interval", interval=int(update_ms), n_intervals=0),
+                html.Pre(id="debug-text")
+            ])
 
             @app.callback(
                 Output("live-graph", "extendData"),
@@ -209,9 +202,8 @@ class RealtimeJointPlotter:
                 with self._lock:
                     n = len(self._t)
                     if n == 0:
-                        return no_update, "No samples yet (buffer empty). Is plotter.sample() being called?"
+                        return no_update, "No samples yet."
 
-                    # Stream ONLY the last sample (fast + stable)
                     t_last = self._t[-1]
                     y_last = [self._y[jn][-1] for jn in self.joint_names]
 
@@ -219,20 +211,54 @@ class RealtimeJointPlotter:
                     "x": [[t_last]] * len(self.joint_names),
                     "y": [[y] for y in y_last],
                 }
-                trace_indices = list(range(len(self.joint_names)))
-                debug = f"samples={n}, last_t={t_last:.3f}, last={dict(zip(self.joint_names, y_last))}"
 
-                # Keep last max_points points (Plotly trims client-side)
+                trace_indices = list(range(len(self.joint_names)))
+                debug = f"samples={n}, last_t={t_last:.3f}"
+
                 return (update, trace_indices, self.max_points), debug
 
-            # Prevent the reloader from spawning a second process/thread
             app.run(host=host, port=port, debug=False, use_reloader=False)
 
         self._dash_thread = threading.Thread(target=_run_dash, daemon=True)
         self._dash_thread.start()
 
+
+    # --------------------------------------------------
+    # Save data to CSV
+    # --------------------------------------------------
+    def save_to_csv(self, filename="simulation_log.csv"):
+        import csv
+
+        with self._lock:
+            if len(self._t) == 0:
+                print("No hay datos para guardar.")
+                return
+
+            time_data = list(self._t)
+            joint_data = {jn: list(self._y[jn]) for jn in self.joint_names}
+
+        try:
+            with open(filename, "w", newline="") as f:
+                writer = csv.writer(f)
+
+                writer.writerow(["time"] + self.joint_names)
+
+                for i in range(len(time_data)):
+                    row = [time_data[i]]
+                    for jn in self.joint_names:
+                        row.append(joint_data[jn][i])
+                    writer.writerow(row)
+
+            print(f"Datos guardados en {filename} ({len(time_data)} muestras).")
+
+        except Exception as e:
+            print(f"Error al guardar CSV: {e}")
+
+
+    # --------------------------------------------------
+    # Stop flag
+    # --------------------------------------------------
     def stop(self) -> None:
-        # Dash doesn't provide a clean stop-from-thread API. Daemon thread exits when process exits.
         self._running = False
 
 
@@ -287,3 +313,5 @@ def hold_position(m, d, viewer, duration, realtime: bool = True, plotter: Option
         viewer.sync()
         if realtime:
             _step_realtime(m, step_start)
+
+
