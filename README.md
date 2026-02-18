@@ -3,3 +3,5 @@
 ## Integrantes
 
 Arturo, Emiliano, Oscar, Rigoberto
+
+Modificar datos de PID en run_mujoco_simulation2.py y correr el mismo archivo
