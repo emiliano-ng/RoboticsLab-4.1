@@ -1,3 +1,5 @@
+#NO USAR ESTE SCRIPT
+
 # run_mujoco_simulation.py
 import mujoco
 import mujoco.viewer
